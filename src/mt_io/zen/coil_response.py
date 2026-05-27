@@ -80,7 +80,9 @@ class CoilResponse:
 
     @calibration_file.setter
     def calibration_file(self, fn: str | Path | None):
-        if fn is not None:
+        if isinstance(fn, float) and np.isnan(fn):
+            self._calibration_fn = None
+        elif fn not in [None, np.nan, ""]:
             try:
                 self._calibration_fn = Path(fn)
             except Exception as e:

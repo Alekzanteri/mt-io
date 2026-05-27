@@ -299,6 +299,9 @@ class Z3DCollection(Collection):
         # Create and process dataframe
         df = self._sort_df(self._set_df_dtypes(pd.DataFrame(entries)), run_name_zeros)
 
+        # remove nans from calibration_fn column
+        df["calibration_fn"] = df["calibration_fn"].fillna("")
+
         # Store consolidated station metadata
         self.station_metadata_dict = self._sort_station_metadata(station_metadata)
 

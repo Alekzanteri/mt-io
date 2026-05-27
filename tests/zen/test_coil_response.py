@@ -255,6 +255,20 @@ class TestCoilResponseCalibrationFile:
 
         assert cr.file_exists() is False
 
+    def test_file_as_nan(self):
+        """Test setting calibration file to NaN."""
+        cr = CoilResponse()
+        cr.calibration_file = np.nan
+
+        assert cr.calibration_file is None
+
+    def test_file_as_empty_string(self):
+        """Test setting calibration file to empty string."""
+        cr = CoilResponse()
+        cr.calibration_file = ""
+
+        assert cr.calibration_file is None
+
 
 class TestCoilResponseReadAntennaFile:
     """Test reading antenna calibration files."""
