@@ -27,7 +27,6 @@ from mt_io.collection import Collection
 from mt_io.zen import Z3D
 from mt_io.zen.coil_response import CoilResponse
 
-
 # =============================================================================
 # Collection of Z3D Files
 # =============================================================================
@@ -356,9 +355,9 @@ class Z3DCollection(Collection):
                     (df.station == station) & (df.start == start)
                 ].sample_rate.unique()[0]
 
-                df.loc[
-                    (df.station == station) & (df.start == start), "run"
-                ] = f"sr{sample_rate:.0f}_{block_num:0{zeros}}"
+                df.loc[(df.station == station) & (df.start == start), "run"] = (
+                    f"sr{sample_rate:.0f}_{block_num:0{zeros}}"
+                )
                 df.loc[
                     (df.station == station) & (df.start == start),
                     "sequence_number",
