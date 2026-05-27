@@ -25,6 +25,7 @@ from mt_metadata.timeseries.filters import FrequencyResponseTableFilter
 
 from mt_io.zen.coil_response import CoilResponse
 
+
 # =============================================================================
 # Test Data
 # =============================================================================
@@ -254,6 +255,13 @@ class TestCoilResponseCalibrationFile:
         cr.calibration_file = nonexistent
 
         assert cr.file_exists() is False
+
+    def test_file_as_nan(self):
+        """Test setting calibration file to NaN."""
+        cr = CoilResponse()
+        cr.calibration_file = np.nan
+
+        assert cr.calibration_file is None
 
 
 class TestCoilResponseReadAntennaFile:
