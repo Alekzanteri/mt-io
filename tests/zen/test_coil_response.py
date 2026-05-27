@@ -263,6 +263,13 @@ class TestCoilResponseCalibrationFile:
 
         assert cr.calibration_file is None
 
+    def test_file_as_empty_string(self):
+        """Test setting calibration file to empty string."""
+        cr = CoilResponse()
+        cr.calibration_file = ""
+
+        assert cr.calibration_file is None
+
 
 class TestCoilResponseReadAntennaFile:
     """Test reading antenna calibration files."""

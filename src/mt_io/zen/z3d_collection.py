@@ -27,6 +27,7 @@ from mt_io.collection import Collection
 from mt_io.zen import Z3D
 from mt_io.zen.coil_response import CoilResponse
 
+
 # =============================================================================
 # Collection of Z3D Files
 # =============================================================================
@@ -299,6 +300,9 @@ class Z3DCollection(Collection):
         # Create and process dataframe
         df = self._sort_df(self._set_df_dtypes(pd.DataFrame(entries)), run_name_zeros)
 
+        # remove nans from calibration_fn column
+        df["calibration_fn"] = df["calibration_fn"].fillna("")
+
         # Store consolidated station metadata
         self.station_metadata_dict = self._sort_station_metadata(station_metadata)
 
@@ -352,9 +356,9 @@ class Z3DCollection(Collection):
                     (df.station == station) & (df.start == start)
                 ].sample_rate.unique()[0]
 
-                df.loc[(df.station == station) & (df.start == start), "run"] = (
-                    f"sr{sample_rate:.0f}_{block_num:0{zeros}}"
-                )
+                df.loc[
+                    (df.station == station) & (df.start == start), "run"
+                ] = f"sr{sample_rate:.0f}_{block_num:0{zeros}}"
                 df.loc[
                     (df.station == station) & (df.start == start),
                     "sequence_number",
