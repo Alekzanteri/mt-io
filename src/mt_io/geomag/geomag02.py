@@ -1,17 +1,9 @@
-
-from email.mime import text
-import json
 import warnings
-from io import StringIO
-
 # =============================================================================
 # Imports
 # =============================================================================
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-
 # supress the future warning from pandas about using datetime parser.
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -20,13 +12,35 @@ import pandas as pd
 from loguru import logger
 from mt_metadata.common.mttime import MTime
 from mt_metadata.timeseries import Auxiliary, Electric, Magnetic, Run, Station
-from mt_metadata.timeseries.filters import ChannelResponse, FrequencyResponseTableFilter
 from mt_timeseries import ChannelTS, RunTS
 
 
 def geomag_date_parser(
     year: int, month: int, day: int, hour: int, minute: int, second: float
 ) -> pd.Series:
+    """
+    This function combines geomag time output into a single column.
+
+    Parameters
+    ----------
+    year : int
+        Year value.
+    month : int
+        Month value (1-12).
+    day : int
+        Day of the month (1-31).
+    hour : int
+        Hour in 24-hour format (0-23).
+    minute : int
+        Minutes in the hour (0-59).
+    second : float
+        Seconds in the minute (0-59).
+
+    Returns
+    -------
+    pd.DatetimeIndex
+        Combined date-time as a pandas DatetimeIndex.
+    """
     dt_df = pd.DataFrame(
         {
             "year": year,
@@ -43,12 +57,46 @@ def geomag_date_parser(
     return pd.to_datetime(dt_df)
 
 class geomag02:
+    """
+    Read geomag02 instrument data file. This is based on LEMI424 reader.
+
+    Parameters
+    ----------
+    fn : str or pathlib.Path, optional
+        Full path to geomag file, by default None.
+    **kwargs : dict
+        Additional keyword arguments for configuration.
+
+    Attributes
+    ----------
+    sample_rate : float
+        Sample rate of the file in samples per second, default is 10.
+    file_column_names : list of str
+        Column names of the geomag02 file.
+    dtypes : dict
+        Data types for each column.
+    data_column_names : list of str
+        Same as file_column_names with an added column for date.
+    data : pd.DataFrame or None
+        The loaded data.
+
+    Note
+    -----
+    This class is only tested with limited amount of data files.
+    This is not tested with data file containing less than 5 channels.
+    Calibrations are not included yet, but that can be added later if found necessary.
+    Aleksanteri Harjulehto 
+    """
 
     def __init__(self, fn: str | Path | None = None, **kwargs: Any) -> None:
         self.logger = logger
         self.fn = fn
-        self.sample_rate = 0.1
+        self.sample_rate = 10
         self.data=None
+        self.lat=0
+        self.lon=0
+        self.elev=0
+        self.data_logger='No info provided'
         self.file_column_names = [
             "year",
             "month",
@@ -62,7 +110,7 @@ class geomag02:
             "ex",
             "ey",
             "temperature_fluxgate",
-            "temperature_instrument"
+            "temperature_logger"
         ]
         self.dtypes=dict(
             [
@@ -78,15 +126,56 @@ class geomag02:
             ("ex", float),
             ("ey", float),
             ("temperature_fluxgate", float),
-            ("temperature_instrument", float)
+            ("temperature_logger", float)
             ]
         )
         self.data_column_names = ["date"] + self.file_column_names[6:]
+        self._has_data=False
+
+    def __add__(self, other: "geomag02 | pd.DataFrame") -> "geomag02":
+        """
+        Combine multiple geomag02 objects today.
+
+        Matching run times, site locations, instrumentations etc. are not checked,
+        so the user must be careful when using this.
+
+        Parameters
+        ----------
+        other : geomag02 or pd.DataFrame
+            Object to append to this geomag02 instance.
+
+        Returns
+        -------
+        geomag02
+            New geomag02 object with combined data.
+
+        Raises
+        ------
+        ValueError
+            If data is None or if DataFrame columns don't match.
+
+        """
+        if not self._has_data:
+            raise ValueError("Data is None cannot append to. Read file first")
+        if isinstance(other, geomag02):
+            new=geomag02()
+            new.__dict__.update(self.__dict__)
+            new.data=pd.concat([new.data, other.data])
+            return new
+        elif isinstance(other, pd.DataFrame):
+            if not other.columns.equals(self.data.columns):
+                raise ValueError("DataFrame columns are not the same.")
+            new = geomag02()
+            new.__dict__.update(self.__dict__)
+            new.data = pd.concat([new.data, other])
+            return new
+        else:
+            raise ValueError(f"Cannot add {type(other)} to pd.DataFrame.")
 
     @property
     def fn(self) -> Path | None:
         """
-        Full path to LEMI424 file.
+        Full path to geomag02 file.
 
         Returns
         -------
@@ -104,7 +193,7 @@ class geomag02:
         Parameters
         ----------
         value : str, pathlib.Path, or None
-            Path to the GEOMAG file.
+            Path to the geomag file.
 
         Raises
         ------
@@ -118,7 +207,97 @@ class geomag02:
                 raise IOError(f"Could not find {value}")
         self._fn = value
     
+    @property
+    def run_time(self) -> dict:
+        """
+        The start and end times are saved to a dictionary.
+
+        Returns
+        -------
+        dict
+            The start time is lableled as "start" and end as "end".
+
+        Raises
+        ------
+        ValueError
+            If self.data is empty. 
+        """
+        runtime={}
+        if self._has_data:
+            runtime['start']=MTime(time_stamp=self.data.index[0])
+            runtime['end']=MTime(time_stamp=self.data.index[-1])
+        else:
+            raise ValueError('No data found, so run time can not be determined.')
+        return runtime
+
+    @property
+    def station_metadata(self) -> Station:
+        """
+        Station metadata as mt_metadata.timeseries.Station object.
+
+        Returns
+        -------
+        mt_metadata.timeseries.Station
+            Station metadata object.
+        """
+        s=Station()
+        if self._has_data:
+            s.location.latitude=self.lat
+            s.location.longitude=self.lon
+            s.location.elevation=self.elev
+            s.time_period.start=self.run_time['start']
+            s.time_period.end=self.run_time['end']
+            s.add_run(self.run_metadata)
+        return s
+
+    @property
+    def run_metadata(self) -> Run:
+        """
+        Run metadata as mt_metadata.timeseries.Run object.
+
+        Returns
+        -------
+        mt_metadata.timeseries.Run
+            Run metadata object.
+
+        """
+        r=Run()
+        r.id="a"
+        r.sample_rate=self.sample_rate
+        r.data_logger.model=self.data_logger
+        r.data_logger.manufacturer="GEOMAG"
+        if self._has_data:
+            r.time_period.start=self.run_time['start']
+            r.time_period.end=self.run_time['end']
+
+            for ch_aux in ["temperature_fluxgate", "temperature_logger"]:
+                r.add_channel(Auxiliary(component=ch_aux))
+            for ch_e in ["ex", "ey"]:
+                r.add_channel(Electric(component=ch_e))
+            for ch_h in ["hx", "hy", "hz"]:
+                r.add_channel(Magnetic(component=ch_h))
+        return r
+
+
+
+    
     def read(self, fn: str | Path | None = None) -> None:
+        """
+        Read a geomag02 file to pandas.
+
+        Parameters
+        ----------
+         fn : str, pathlib.Path, or None, optional
+            Full path to file. Uses self.fn if not provided, by default None.
+        
+        Raises
+        ------
+        IOError
+            If file cannot be found.
+        ValueError:
+            if data file is empty.    
+
+        """
         st = MTime(time_stamp=None).now()
         if fn is not None:
             self.fn = fn
@@ -127,6 +306,9 @@ class geomag02:
             self.logger.error(msg)
             raise IOError(msg)
         self.read_metadata()
+
+        # reading in chunks is not implemented.
+        # By default geomag saves 1 file per day leading to reasonable file sizes.
         self.data=pd.read_csv(
             self.fn,
             delimiter=r"\s+",
@@ -136,6 +318,8 @@ class geomag02:
 
         if self.data.empty:
                 raise ValueError("File is empty or contains no valid data")
+        else:
+            self._has_data=True
 
         self.data.index=geomag_date_parser(
             self.data["year"],
@@ -149,11 +333,19 @@ class geomag02:
         self.data = self.data.drop(
             columns=["year", "month", "day", "hour", "minute", "second"]
         )
+
+        self.data['hx']=self.x_total+self.data['hx'].cumsum()
+        self.data['hy']=self.y_total+self.data['hy'].cumsum()
+        self.data['hz']=self.z_total+self.data['hz'].cumsum()
+
         et = MTime(time_stamp=None).now()
         self.logger.debug(f"Reading {self.fn.name} took {et - st:.2f} seconds")
 
 
     def read_metadata(self) -> None:
+        """
+        Read metadata stored on the first 9 lines of the datafile.
+        """
         def _get_lat_lon_elev(line):
             parts = line.split(';')
             lat_str = parts[1].split(':')[1].strip()
@@ -182,7 +374,7 @@ class geomag02:
         def _validate_elevation(elev_str):
             elev_str=elev_str.replace("-", "")
             if len(elev_str)==0:
-                print("No elevation provided, setting to 0 m")
+                self.logger.warning("No elevation provided, setting to 0 m")
                 elev=0
             else:
                 elev=float(elev_str[:-1])
@@ -203,7 +395,7 @@ class geomag02:
                 "Ex":"ex",
                 "Ey": "ey",
                 "Ts": "temperature_fluxgate",
-                "Te": "temperature_instrument"
+                "Te": "temperature_logger"
             }
             parts = unit_str.split(' ')
             units = {}
@@ -219,21 +411,29 @@ class geomag02:
             return(units)
 
         with open(self.fn, "r") as f:
-            f.readline()
-            f.readline()
-            self.sample_rate=float(f.readline().strip().split(' ')[-2])
+            self.data_logger=f.readline().replace(";", "").strip()
+            next(f)
+            self.sample_rate=float(f.readline().strip().split(' ')[-2])**(-1)
             line4=f.readline().strip()
             self.lat, self.lon, self.elev = _get_lat_lon_elev(line4)
             line5=f.readline().strip()
             self.x_total, self.y_total, self.z_total=_get_total_fields(line5)
-            f.readline()
+            next(f)
             line7=f.readline().strip()
             self.units=_get_units(line7)
     
     def to_run_ts(self) -> RunTS:
+        """
+        Create a RunTS object from the data.
+
+        Returns
+        -------
+        mth5.timeseries.RunTS
+            RunTS object containing the data
+        """
         ch_list=[]
         for comp in self.units.keys():
-            if comp[0]=="b":
+            if comp[0]=="h":
                 ch=ChannelTS("magnetic")
                 ch.channel_metadata.units=self.units[comp]
             elif comp[0]=="e":
@@ -243,15 +443,30 @@ class geomag02:
                 ch=ChannelTS("auxilary")
                 ch.channel_metadata.units=self.units[comp]
             ch.sample_rate=self.sample_rate
-            #ch.start=self.start
+            ch.start=self.run_time['start']
             ch.ts=self.data[comp].values
-            ch.componnent=comp
+            ch.component=comp
             ch_list.append(ch)
         return RunTS(
-            array_list=ch_list
+            array_list=ch_list,
+            station_metadata=self.station_metadata,
+            run_metadata=self.run_metadata
         )
 
 def read_geomag02(fn: str | Path | list[str | Path]) -> RunTS:
+    """
+    Read geomag02.txt file.
+
+    Parameters
+    ----------
+    fn : str or pathlib.Path or list of either
+        Input file or files
+
+    Returns
+    -------
+    mth5.timeseries.RunTS
+        A RunTS object with appropriate metadata.
+    """
     if not isinstance(fn, (list, tuple)):
         fn = [fn]
     txt_obj = geomag02(fn[0])
