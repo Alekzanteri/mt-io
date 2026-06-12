@@ -97,6 +97,7 @@ class geomag02:
         self.lon=0
         self.elev=0
         self.data_logger='No info provided'
+        self._start=0
         self.file_column_names = [
             "year",
             "month",
@@ -215,19 +216,16 @@ class geomag02:
         Returns
         -------
         dict
-            The start time is lableled as "start" and end as "end".
-
-        Raises
-        ------
-        ValueError
-            If self.data is empty. 
+            The start time is lableled as "start" and end as "end". 
         """
         runtime={}
         if self._has_data:
             runtime['start']=MTime(time_stamp=self.data.index[0])
             runtime['end']=MTime(time_stamp=self.data.index[-1])
         else:
-            raise ValueError('No data found, so run time can not be determined.')
+            runtime["start"]=MTime(time_stamp=self._start)
+            end=self._start+pd.Timedelta(seconds=self.n_samples/self.sample_rate)
+            runtime["end"]=MTime(time_stamp=end)
         return runtime
 
     @property
@@ -278,7 +276,28 @@ class geomag02:
                 r.add_channel(Magnetic(component=ch_h))
         return r
 
-
+    @property
+    def n_samples(self) -> int:
+        """
+        Return number of samples. Returns 0 if no data is found.
+        """
+        if self._has_data:
+            return self.data.shape[0]
+        elif self.fn is not None and self.fn.exists():
+            with open (self.fn, "r") as f:
+                return sum(1 for _ in f)-8
+        else:
+            return 0
+    
+    @property
+    def file_size(self) -> int:
+        """"
+        Returns datafile size. Returns 0 if data file is not given.
+        """
+        if self.fn is not None:
+            return self.fn.stat().st_size
+        else:
+            return 0
 
     
     def read(self, fn: str | Path | None = None) -> None:
@@ -346,6 +365,14 @@ class geomag02:
         """
         Read metadata stored on the first 9 lines of the datafile.
         """
+        def _get_start_time(date_str):
+            parts=date_str.split(";")
+            date_part=parts[1].split(":")[1].strip()
+            time_part = parts[2].replace("Time: ","")
+            dt_str = f"{date_part} {time_part}"
+            dt = pd.to_datetime(dt_str, format=r"%Y/%m/%d %H:%M:%S")
+            return dt 
+        
         def _get_lat_lon_elev(line):
             parts = line.split(';')
             lat_str = parts[1].split(':')[1].strip()
@@ -408,11 +435,13 @@ class geomag02:
                     unit = part.split('[')[1].replace(']', '')
                     units[name_changer[name]] = unit
                 i+=1
-            return(units)
+            return(units)           
+
 
         with open(self.fn, "r") as f:
             self.data_logger=f.readline().replace(";", "").strip()
-            next(f)
+            line2=f.readline().strip()
+            self._start=_get_start_time(line2)
             self.sample_rate=float(f.readline().strip().split(' ')[-2])**(-1)
             line4=f.readline().strip()
             self.lat, self.lon, self.elev = _get_lat_lon_elev(line4)
@@ -421,6 +450,7 @@ class geomag02:
             next(f)
             line7=f.readline().strip()
             self.units=_get_units(line7)
+
     
     def to_run_ts(self) -> RunTS:
         """
